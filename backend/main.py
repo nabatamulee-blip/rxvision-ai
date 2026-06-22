@@ -1,81 +1,80 @@
-from __future__ import annotations
-
 import io
-import json
 import os
+import fitz
 import uuid
-from datetime import datetime
+import json
 from pathlib import Path
 from typing import List, Optional
-
-from dotenv import load_dotenv
-load_dotenv()
-
-import fitz  # PyMuPDF
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
+from PIL import Image
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from pydantic_settings import BaseSettings
+
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime
+from sqlalchemy.orm import sessionmaker, declarative_base
+from datetime import datetime
 from google import genai
 from google.genai import types
-from PIL import Image
-from pydantic import BaseModel, Field
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, create_engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-BASE_DIR = Path(__file__).resolve().parent
-UPLOAD_DIR = BASE_DIR / "uploads"
+# ---- Config & DB Setup ----
+class Settings(BaseSettings):
+    google_api_key: str = "YOUR_API_KEY_HERE"
+    database_url: str = "sqlite:///./rxvision.db"
+    frontend_origin: str = "http://localhost:5173"
+    gemini_model: str = "gemini-1.5-flash"
+
+    class Config:
+        env_file = ".env"
+        extra = "ignore"
+
+settings = Settings()
+
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", settings.google_api_key)
+DATABASE_URL = os.getenv("DATABASE_URL", settings.database_url)
+FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", settings.frontend_origin)
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", settings.gemini_model)
+
+UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR / 'app.db'}")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
-FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
-
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
-)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-
-class Base(DeclarativeBase):
-    pass
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
 class PrescriptionRecord(Base):
-    __tablename__ = "prescription_records"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    filename: Mapped[str] = mapped_column(String(255))
-    file_path: Mapped[str] = mapped_column(String(500))
-    mime_type: Mapped[str] = mapped_column(String(100))
-    ai_json: Mapped[str] = mapped_column(Text)
-    verified_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    verified: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    __tablename__ = "prescriptions"
+    id = Column(Integer, primary_key=True, index=True)
+    filename = Column(String, index=True)
+    file_path = Column(String)
+    mime_type = Column(String)
+    ai_json = Column(String)
+    verified_json = Column(String, nullable=True)
+    verified = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 Base.metadata.create_all(bind=engine)
 
-class MedicineAlternative(BaseModel):
-    name: str
-    confidence: int = Field(ge=0, le=100)
-
+# ---- Models ----
 class MedicineItem(BaseModel):
-    raw_observed_text: str
-    predicted_name: str
-    confidence: int = Field(ge=0, le=100)
-    alternatives: List[MedicineAlternative] = []
-    dosage: str = ""
-    frequency: str = ""
-    duration: str = ""
-    route: str = ""
-    remarks: str = ""
-    uncertainty_reason: str = ""
+    raw_observed_text: str = Field(..., description="Exact text seen on image")
+    predicted_name: str = Field(..., description="Likely standard name of the medicine")
+    confidence: int = Field(..., description="0-100 confidence score")
+    alternatives: List[str] = Field(default_factory=list, description="Alternative interpretations if unclear")
+    dosage: Optional[str] = None
+    frequency: Optional[str] = None
+    duration: Optional[str] = None
+    route: Optional[str] = None
+    remarks: Optional[str] = None
+    uncertainty_reason: Optional[str] = None
 
 class PrescriptionResult(BaseModel):
-    patient_name: str = ""
-    doctor_name: str = ""
-    date: str = ""
-    overall_confidence: int = Field(ge=0, le=100)
-    medicines: List[MedicineItem] = []
+    patient_name: Optional[str] = None
+    doctor_name: Optional[str] = None
+    date: Optional[str] = None
+    overall_confidence: int
+    medicines: List[MedicineItem]
     warning_flags: List[str] = []
     clarification_questions: List[str] = []
     summary: str = ""
@@ -193,7 +192,7 @@ def analyze_with_gemini(image: Image.Image) -> PrescriptionResult:
 
     schema = PrescriptionResult
 
-        response = client.models.generate_content(
+    response = client.models.generate_content(
         model=GEMINI_MODEL,
         contents=[image, build_prompt()],
         config=types.GenerateContentConfig(
@@ -202,7 +201,6 @@ def analyze_with_gemini(image: Image.Image) -> PrescriptionResult:
             response_schema=schema,
         ),
     )
-            
 
     raw = response.text or "{}"
     try:
