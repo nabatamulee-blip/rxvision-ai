@@ -193,15 +193,15 @@ def analyze_with_gemini(image: Image.Image) -> PrescriptionResult:
 
     schema = PrescriptionResult
 
-        # Compress the image aggressively to a tiny JPEG to fix the upload lag
-    buffer = io.BytesIO()
-    image.save(buffer, format="JPEG", quality=60)
-    image_bytes = buffer.getvalue()
-
-    response = client.models.generate_content(
+           response = client.models.generate_content(
         model=GEMINI_MODEL,
-        contents=[
-            types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+        contents=[image, build_prompt()],
+        config=types.GenerateContentConfig(
+            temperature=0.0,  # 0.0 forces 100% deterministic output
+            response_mime_type="application/json",
+            response_schema=schema,
+        ),
+    )
             build_prompt()
         ],
         config=types.GenerateContentConfig(
