@@ -7,6 +7,6 @@ sqlalchemy
 pymupdf
 pillow
 python-dotenv
-google-genai
+google-genai==2.9.0
 pytest
 httpx
