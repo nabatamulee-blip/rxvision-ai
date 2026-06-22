@@ -193,23 +193,16 @@ def analyze_with_gemini(image: Image.Image) -> PrescriptionResult:
 
     schema = PrescriptionResult
 
-    response = client.models.generate_content(
-       model=GEMINI_MODEL,
-       contents=[image, build_prompt()],
-       config=types.GenerateContentConfig(
-            temperature=0.0,  # 0.0 forces 100% deterministic output
-            response_mime_type="application/json",
-            response_schema=schema,
-        ),
-    )
-            build_prompt()
-        ],
+        response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[image, build_prompt()],
         config=types.GenerateContentConfig(
-            temperature=0.0,  # 0.0 forces 100% deterministic output (stops changing scores!)
+            temperature=0.0,
             response_mime_type="application/json",
             response_schema=schema,
         ),
     )
+            
 
     raw = response.text or "{}"
     try:
