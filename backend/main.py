@@ -28,7 +28,7 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR / 'app.db'}")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
 
 engine = create_engine(
@@ -130,7 +130,7 @@ def bytes_to_pil(file: UploadFile, content: bytes) -> Image.Image:
         img = Image.open(io.BytesIO(content)).convert("RGB")
     
     # Resize image to speed up upload and Gemini processing
-    img.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
+    img.thumbnail((1600, 1600), Image.Resampling.BILINEAR)
     return img
 
 def build_prompt() -> str:
@@ -193,11 +193,19 @@ def analyze_with_gemini(image: Image.Image) -> PrescriptionResult:
 
     schema = PrescriptionResult
 
+        # Compress the image aggressively to a tiny JPEG to fix the upload lag
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=60)
+    image_bytes = buffer.getvalue()
+
     response = client.models.generate_content(
         model=GEMINI_MODEL,
-        contents=[image, build_prompt()],
+        contents=[
+            types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+            build_prompt()
+        ],
         config=types.GenerateContentConfig(
-            temperature=0.1,
+            temperature=0.0,  # 0.0 forces 100% deterministic output (stops changing scores!)
             response_mime_type="application/json",
             response_schema=schema,
         ),
